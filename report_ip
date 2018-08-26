@@ -1,0 +1,107 @@
+#!/bin/bash
+
+
+# Script name
+NAME='RLinux IP Monitor'
+
+# Script params
+INTERFACE='wlan0'
+MAIN_DOMAIN='dosk.win'
+MAIN_DOMAIN_SUB='pi'
+
+# Script token
+TOKEN_ID=''
+TOKEN_KEY=''
+LOGIN_TOKEN=$TOKEN_ID,$TOKEN_KEY
+
+
+# Function part
+function getIP {
+  IF=$1
+  I6=$2
+  if [ ${I6}x == 'truex' ];then
+    IPS=`ifconfig $IF | grep inet6 | awk -F ' ' '{print \$2}'`
+  else
+    IPS=`ifconfig $IF | grep inet[^6] | awk -F ' ' '{print \$2}'`
+  fi
+  echo $IPS
+}
+
+function getJSONParser {
+  if [ -f /tmp/json.sh ];then
+    echo 0
+  else
+    curl https://raw.githubusercontent.com/dominictarr/JSON.sh/master/JSON.sh > /tmp/json.sh 2>/dev/null
+    RET=$?
+    chmod 755 /tmp/json.sh 2>/dev/null
+    echo $RET
+  fi
+}
+
+function getUserDetial {
+  echo $(curl -X POST https://dnsapi.cn/User.Detail -d "login_token=$LOGIN_TOKEN&format=json" 2>/dev/null)
+}
+
+function getRecord {
+  DOMAIN=$1
+  echo $(curl -X POST https://dnsapi.cn/Record.List -d "login_token=$LOGIN_TOKEN&format=json&domain=$DOMAIN&record_type=A" 2>/dev/null)
+}
+
+function updateRecord {
+  DOMAIN=$1
+  SUB_DOMAIN=$2
+  IP=$3
+  ID=$4
+  echo $(curl -X POST https://dnsapi.cn/Record.Modify -d "login_token=$LOGIN_TOKEN&format=json&domain=$DOMAIN&sub_domain=$SUB_DOMAIN&record_id=$ID&record_type=A&record_line=默认&value=$IP" 2>/dev/null)
+}
+
+function removeFirstAndLastChar {
+  read STR
+  echo ${STR:1:${#STR}-2}
+}
+
+function JSONKey {
+  read JSON
+  KEY="\\[$1\\]"
+  echo $(echo $JSON | /tmp/json.sh | grep $KEY | awk -F ' ' '{$1=""; print $0}')
+}
+
+function main {
+  if [ ! $(getJSONParser) ];then
+    echo 'Error to get json parser !'
+    exit 1
+  fi
+  IPv4=$(getIP $INTERFACE)
+  IPv6=$(getIP $INTERFACE true)
+  EMAIL=$(getUserDetial | JSONKey '"info","user","email"')
+  echo Email: $EMAIL
+  echo Network: $INTERFACE
+  echo IPv4 address: $IPv4
+  echo IPv6 address: $IPv6
+  echo Updating domain $MAIN_DOMAIN_SUB.$MAIN_DOMAIN ...
+  sleep 1
+  RECORDS=$(getRecord $MAIN_DOMAIN)
+  FINAL_RECORD_ID=-1
+  index=$(echo $RECORDS | JSONKey '"info","record_total"' | removeFirstAndLastChar)
+  while [ $index != 0 ];do
+    index=$(expr $index - 1)
+    RECORD_ID=$(echo $RECORDS | JSONKey "\"records\",$index,\"id\"" | removeFirstAndLastChar )
+    RECORD_NAME=$(echo $RECORDS | JSONKey "\"records\",$index,\"name\"" | removeFirstAndLastChar )
+    echo Record id: $RECORD_ID for name: $RECORD_NAME
+    if [ ${RECORD_NAME}x == ${MAIN_DOMAIN_SUB}x ];then
+      FINAL_RECORD_ID=$RECORD_ID
+    fi
+  done
+  if [ $FINAL_RECORD_ID == -1 ];then
+    echo Error to get record id, exit !
+    exit 1;
+  else
+    RESULT=$(updateRecord $MAIN_DOMAIN $MAIN_DOMAIN_SUB $IPv4 $FINAL_RECORD_ID | JSONKey '"status","message"' | removeFirstAndLastChar)
+    sleep 1
+    echo Update result: $RESULT
+  fi
+}
+
+
+# Main part
+main
